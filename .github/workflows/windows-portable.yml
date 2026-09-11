@@ -2,9 +2,11 @@ name: Build and Release Android
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,6 +15,7 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,6 +31,7 @@ jobs:
 
       - name: Install Gradle 8.11.1
         run: |
+          set -euo pipefail
           curl -L -o gradle.zip https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
           unzip -q gradle.zip
 
@@ -41,10 +45,13 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
+          set -euo pipefail
+
           if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
             echo "ERROR: permanent Android signing secrets are missing."
             exit 1
           fi
+
           mkdir -p signing
           printf '%s' "$KEYSTORE_B64" | base64 --decode > signing/monitor-noticias-release.jks
           test -s signing/monitor-noticias-release.jks
@@ -62,36 +69,72 @@ jobs:
           ANDROID_SIGNING_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
+
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           FINAL="app/build/outputs/apk/release/app-release.apk"
           KEYSTORE="signing/monitor-noticias-release.jks"
           EXPECTED_CERT="07164d3faf3ee09f241a547d403767c454b226faac26c4b058bc5011d773b1b0"
+
+          test -n "$APKSIGNER"
+          test -s "$FINAL"
+
           "$APKSIGNER" verify --verbose "$FINAL"
           final_output=$("$APKSIGNER" verify --verbose --print-certs "$FINAL" 2>&1)
           printf '%s\n' "$final_output"
+
           extract_cert() {
             local output="$1"
             local line
+
             line=$(printf '%s\n' "$output" | grep -iE 'certificate.*sha-?256.*digest|sha-?256.*certificate.*digest' | head -1 || true)
-            if [ -z "$line" ]; then line=$(printf '%s\n' "$output" | grep -iE 'sha-?256.*digest' | head -1 || true); fi
-            printf '%s\n' "$line" | sed -E 's/.*[Dd]igest:[[:space:]]*//' | tr -d ':[:space:]\r' | tr 'A-F' 'a-f'
+
+            if [ -z "$line" ]; then
+              line=$(printf '%s\n' "$output" | grep -iE 'sha-?256.*digest' | head -1 || true)
+            fi
+
+            printf '%s\n' "$line" \
+              | sed -E 's/.*[Dd]igest:[[:space:]]*//' \
+              | tr -d ':[:space:]\r' \
+              | tr 'A-F' 'a-f'
           }
+
           FINAL_CERT=$(extract_cert "$final_output")
-          KEYSTORE_CERT=$(keytool -list -v -keystore "$KEYSTORE" -alias monitor-noticias -storepass "$ANDROID_SIGNING_PASSWORD" 2>/dev/null | awk -F': ' '/SHA256:/{gsub(":","",$2); gsub(/[[:space:]]/,"",$2); print tolower($2); exit}')
+          KEYSTORE_CERT=$(keytool -list -v \
+            -keystore "$KEYSTORE" \
+            -alias monitor-noticias \
+            -storepass "$ANDROID_SIGNING_PASSWORD" 2>/dev/null \
+            | awk -F': ' '/SHA256:/{gsub(":","",$2); gsub(/[[:space:]]/,"",$2); print tolower($2); exit}')
+
           echo "Release certificate:  $FINAL_CERT"
           echo "Keystore certificate: $KEYSTORE_CERT"
+
           test -n "$FINAL_CERT"
           test -n "$KEYSTORE_CERT"
           test "$KEYSTORE_CERT" = "$EXPECTED_CERT"
           test "$FINAL_CERT" = "$EXPECTED_CERT"
+
           echo "PERMANENT_SIGNING_OK=true"
 
-      - name: Prepare v4.2.0 release asset
+      - name: Prepare v4.2.0 download file
         if: github.event_name != 'pull_request'
-        run: cp app/build/outputs/apk/release/app-release.apk monitor-de-noticias-v4.2.0.apk
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/release/app-release.apk monitor-de-noticias-v4.2.0.apk
+          test -s monitor-de-noticias-v4.2.0.apk
+          ls -lh monitor-de-noticias-v4.2.0.apk
 
-      - name: Point v4.2.0 tag to validated main commit
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Disponibiliza o APK para download diretamente na execução do GitHub Actions.
+      - name: Upload APK artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-de-noticias-v4.2.0
+          path: monitor-de-noticias-v4.2.0.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Point v4.2.0 tag to validated commit
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -99,9 +142,10 @@ jobs:
           git tag -f v4.2.0 "$GITHUB_SHA"
           git push --force origin refs/tags/v4.2.0
 
+      # Publica/atualiza a Release tanto em push na main quanto em execução manual.
       - name: Publish GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v4.2.0
           target_commitish: ${{ github.sha }}
@@ -130,6 +174,10 @@ jobs:
             - mesmo applicationId br.com.monitordenoticias.android;
             - mesma assinatura permanente validada pelo certificado SHA-256 esperado;
             - atualização direta sobre v4.1.0 preservando banco, notícias, vídeos, Termos, Demandas, fontes, histórico e configurações.
-          files: monitor-de-noticias-v4.2.0.apk
+          files: |
+            monitor-de-noticias-v4.2.0.apk
+          fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
