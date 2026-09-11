@@ -1,62 +1,89 @@
-# Monitor de Notícias Android
+# Monitor de Notícias v4.0.2 — Clean-room
 
-Aplicativo Android em Kotlin/Jetpack Compose para monitoramento de notícias, termos, demandas e veículos de imprensa.
+Reimplementação independente, do zero, de um monitor desktop de notícias e vídeos para Windows, baseada em um contrato funcional. Não contém código binário/decompilado do aplicativo original.
 
-## Próxima versão
-**2.5.0**
+## O que já está implementado
 
-### Principais recursos
-- Busca no Google Notícias via RSS
-- Detecção de notícias realmente novas
-- Demandas com pesquisa própria por veículo + assunto
-- Busca manual de todas as demandas
-- Busca manual de uma demanda individual
-- Monitoramento automático das demandas aproximadamente a cada 1 hora via WorkManager
-- Status persistente por demanda: última execução, encontrados, novos e erro
-- Histórico local e exportação CSV
-- Intervalo de monitoramento persistente
-- Notificações para novas notícias e demandas
-- Navegação superior com abas deslizáveis
-- Seleção persistente de fontes
-- Busca por veículo/grupo e filtros por região/estado
-- Selecionar/desmarcar as fontes visíveis
-- Modo `Buscar em todos os veículos` para busca aberta, inclusive veículos menores
-- 13 veículos nacionais predefinidos
-- Catálogo estadual inicial com 4 veículos de referência por UF
-- Pesquisa por período com data e hora inicial/final persistentes
-- Atalhos Hoje / 24 horas / 7 dias / 30 dias
-- Validação de períodos inválidos
+- Interface Jetpack Compose Desktop com 8 áreas: Início, Notícias, Vídeos, Termos, Demandas, Fontes, Histórico e Configurações.
+- SQLite local (`data/news.db` e `data/videos.db`).
+- Termos de notícias e termos de vídeos independentes.
+- Demandas `Veículo + Assunto` com execução individual ou em lote.
+- Busca real de notícias via Google News RSS, filtrada por termos/fontes/período.
+- Coleta modular de candidatos de vídeo em fontes cadastradas.
+- Deduplicação por URL canônica e indicação de itens novos.
+- Histórico persistente e exportação CSV UTF-8.
+- Automação por intervalo para notícias/demandas e por horários para vídeos.
+- Proxy JVM, senha protegida por DPAPI no Windows e teste de conexão.
+- Inicialização por usuário via `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`.
+- Testes unitários para normalização, matching, URL e SQLite.
 
-## Fontes nacionais incluídas
-O Globo, Correio Braziliense, G1, R7, Revista Oeste, Folha de S.Paulo, Estadão, Valor Econômico, O Antagonista, CNN Brasil, Jovem Pan, Estado de Minas e Metrópoles.
+## Requisitos para desenvolvimento
 
-> O catálogo estadual é uma curadoria inicial de veículos de grande relevância/alcance em cada UF. O modo de busca aberta continua disponível para encontrar veículos fora desse catálogo.
+- JDK 17 ou superior.
+- Windows 10/11 x64 para gerar o `.exe` nativo.
 
-## Preservação de dados ao sair da v2.4
+O aplicativo empacotado pelo Compose/jpackage inclui runtime próprio; o usuário final não precisa instalar Java.
 
-A Release v2.4.0 foi assinada com uma chave de debug efêmera do GitHub Actions. Como essa chave privada não existe mais, a primeira transição para a assinatura permanente exige uma migração única por ADB.
+## Executar em desenvolvimento
 
-O utilitário `tools/migrate_v24_data.py`:
-1. salva `news.db` e `shared_prefs` da v2.4 usando `run-as`;
-2. valida o backup antes de remover qualquer app;
-3. instala uma build de migração v2.5, assinada com a nova chave permanente;
-4. restaura banco e preferências;
-5. abre o app uma vez para executar a migração SQLite 2 → 3;
-6. instala por cima o APK final v2.5 com a mesma chave permanente.
+```bat
+gradlew.bat run
+```
 
-Depois dessa transição única, as versões futuras usam a mesma chave permanente e podem atualizar normalmente sem desinstalar o aplicativo.
+Linux/macOS:
 
-## Assinatura permanente
+```bash
+./gradlew run
+```
 
-O projeto nunca deve versionar `.jks`/`.keystore`. O workflow de Release receberá a chave por GitHub Actions Secrets e assinará tanto o APK de migração quanto o APK final com o mesmo certificado.
+## Testes
 
-Secrets previstos:
-- `ANDROID_KEYSTORE_BASE64`
-- `ANDROID_KEYSTORE_PASSWORD`
+```bat
+gradlew.bat clean test
+```
 
-Alias fixo: `monitor-noticias`.
+## Gerar pacote Windows
 
-## Build
-O projeto usa Android Gradle Plugin 8.7.3, Kotlin 2.0.21, Java 17, compileSdk 35 e targetSdk 35.
+Execute **no Windows x64**:
 
-A automação em `.github/workflows/release.yml` compila o APK no GitHub Actions. Pull requests são usados para validação e o `main` publica a Release somente quando a assinatura permanente estiver configurada.
+```bat
+scripts\\build-windows.bat
+```
+
+ou:
+
+```bat
+gradlew.bat clean test packageDistributionForCurrentOS
+```
+
+Os artefatos ficam em `build/compose/binaries/`.
+
+## Dados portáteis
+
+Ao executar a partir da pasta do aplicativo, os dados são gravados em:
+
+- `data/news.db`
+- `data/videos.db`
+- `data/preferences/`
+- `data/logs/`
+
+## Observações
+
+Sites de notícias e vídeo alteram HTML, bloqueios e políticas com frequência. Os coletores foram isolados para que fontes possam ser ajustadas sem reescrever o aplicativo inteiro. O projeto evita resultados hardcoded; as pesquisas dependem das respostas reais das fontes.
+
+## GitHub Actions
+
+O repositório inclui workflows em `.github/workflows/`:
+
+- `ci.yml`: executa `clean test` em Ubuntu a cada push/pull request.
+- `build-windows.yml`: compila e publica os binários Windows como artefato do GitHub Actions.
+- `release-windows.yml`: ao criar uma tag `v*` (por exemplo `v4.0.2`), compila no Windows, cria `MonitorDeNoticias-Windows.zip` e publica uma GitHub Release. Também pode ser iniciado manualmente pela aba **Actions**.
+
+Para gerar uma release automática:
+
+```bash
+git tag v4.0.2
+git push origin v4.0.2
+```
+
+Depois acompanhe a execução em **GitHub > Actions > Release Windows**. O ZIP também ficará disponível na página **Releases** do repositório.
