@@ -1,0 +1,74 @@
+name: Windows Portable v4.0.2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "windows/**"
+      - "codex/windows/**"
+    paths:
+      - "desktop/**"
+      - "app/src/main/java/br/com/monitordenoticias/android/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - ".github/workflows/windows-portable.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "app/src/main/java/br/com/monitordenoticias/android/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - ".github/workflows/windows-portable.yml"
+
+permissions:
+  contents: write
+
+# O próprio runner instala o Gradle porque o projeto Android original não possui wrapper versionado.
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build Windows app image
+        shell: pwsh
+        run: gradle :desktop:createDistributable --stacktrace
+
+      - name: Verify and create portable ZIP
+        shell: pwsh
+        run: |
+          $root = "desktop\build\compose\binaries\main\app"
+          if (!(Test-Path $root)) { throw "Compose app image was not generated: $root" }
+          $appDir = Get-ChildItem $root -Directory | Select-Object -First 1
+          if ($null -eq $appDir) { throw "Portable application directory not found." }
+          $exe = Get-ChildItem $appDir.FullName -Filter *.exe -Recurse | Select-Object -First 1
+          if ($null -eq $exe) { throw "Windows executable not found in app image." }
+          New-Item -ItemType Directory -Force -Path "$($appDir.FullName)\data" | Out-Null
+          $zip = "$PWD\monitor-de-noticias-windows-portable-v4.0.2.zip"
+          Compress-Archive -Path "$($appDir.FullName)\*" -DestinationPath $zip -Force
+          Get-Item $zip | Format-List FullName,Length
+
+      - name: Publish portable ZIP in Windows prerelease
+        if: github.ref == 'refs/heads/codex/windows/v4.0.2-portable'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "windows-v4.0.2-portable"
+          $asset = "monitor-de-noticias-windows-portable-v4.0.2.zip"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $asset --target "${{ github.sha }}" --title "Monitor de Notícias v4.0.2 — Windows Portable" --notes "Build Windows portable da v4.0.2. Mantém o motor de Notícias/Vídeos da versão Android e adapta somente as camadas específicas da plataforma para Windows." --prerelease
+          } else {
+            gh release upload $tag $asset --clobber
+          }
